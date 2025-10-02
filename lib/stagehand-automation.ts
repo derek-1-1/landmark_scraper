@@ -2,8 +2,10 @@ import { Stagehand, Page } from "@browserbasehq/stagehand";
 import { S3Uploader } from "./s3-upload.js";
 
 export interface ScrapeConfig {
-  daysBack: number;
-  recordType: string;
+  startDate: string;  // MM/DD/YYYY format
+  endDate: string;    // MM/DD/YYYY format
+  documentTypes: string[];  // Array of document types: ["DEED", "QUITCLAIM DEED", etc.]
+  county: string;     // For future multi-county support
 }
 
 export class LandmarkScraper {
@@ -13,10 +15,7 @@ export class LandmarkScraper {
   private sessionInfo: any;
 
   constructor(config: ScrapeConfig) {
-    this.config = {
-      daysBack: config.daysBack || 30,
-      recordType: config.recordType || "DEED"
-    };
+    this.config = config;
     
     this.stagehand = new Stagehand({
       env: "BROWSERBASE",
@@ -27,6 +26,7 @@ export class LandmarkScraper {
       modelClientOptions: {
         apiKey: process.env.DEEPSEEK_API_KEY!,
         baseURL: "https://api.deepseek.com/v1",
+        temperature: 0.1,
       },
       browserbaseSessionCreateParams: {
         projectId: process.env.BROWSERBASE_PROJECT_ID!,
@@ -44,125 +44,111 @@ export class LandmarkScraper {
     this.s3Uploader = new S3Uploader();
   }
 
-  private calculateStartDate(): string {
-    const date = new Date();
-    date.setDate(date.getDate() - this.config.daysBack);
-    return `${(date.getMonth() + 1).toString().padStart(2, "0")}/${date
-      .getDate()
-      .toString()
-      .padStart(2, "0")}/${date.getFullYear()}`;
+  /**
+   * Generate array of dates between start and end
+   */
+  private generateDateRange(startDate: string, endDate: string): string[] {
+    const dates: string[] = [];
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    
+    // Iterate through each day
+    for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const day = date.getDate().toString().padStart(2, '0');
+      const year = date.getFullYear();
+      dates.push(`${month}/${day}/${year}`);
+    }
+    
+    return dates;
   }
 
-  async execute(): Promise<{ success: boolean; s3Path?: string; error?: string }> {
+  /**
+   * Clear and fill a date field properly
+   */
+  private async fillDateField(page: Page, selector: string, dateValue: string): Promise<void> {
+    const field = page.getByRole('textbox', { name: selector });
+    await field.click();
+    
+    // Clear the field first
+    await field.press('Control+a');
+    await field.press('Delete');
+    
+    // Fill with new date
+    await field.fill(dateValue);
+    await page.waitForTimeout(500);
+  }
+
+  /**
+   * Scrape records for a single day and document type
+   */
+  private async scrapeSingleDay(
+    page: Page, 
+    date: string, 
+    documentType: string
+  ): Promise<{ success: boolean; s3Path?: string; error?: string }> {
     try {
-      // Initialize Stagehand session
-      this.sessionInfo = await this.stagehand.init();
-      console.log(`Session started: ${this.sessionInfo.sessionId}`);
-      console.log(`Debug URL: ${this.sessionInfo.debugUrl}`);
-      console.log(`Session URL: ${this.sessionInfo.sessionUrl}`);
-      
-      // Get the page from Stagehand (it's a Playwright Page object)
-      const page = this.stagehand.page;
+      console.log(`Scraping ${documentType} records for ${date}...`);
 
-      // Step 1: Navigate to website
-      console.log("Step 1: Navigating to King County Landmark...");
-      await page.goto("https://recordsearch.kingcounty.gov/LandmarkWeb", {
-        waitUntil: "networkidle",
-        timeout: 60000,
-      });
-      await page.waitForTimeout(2000);
+      // Navigate to Document Search if not already there
+      const documentSearchLink = page.getByRole('link', { name: 'Document Search' });
+      if (await documentSearchLink.isVisible({ timeout: 5000 })) {
+        await documentSearchLink.click();
+        await page.waitForTimeout(2000);
+      }
 
-      // Step 2: Click Acknowledge Disclaimer - Using Playwright selector
-      console.log("Step 2: Acknowledging disclaimer...");
-      await page.getByRole('link', { name: 'Acknowledge Disclaimer to' }).click();
-      await page.waitForTimeout(3000);
-
-      // Step 3: Click Full System - Using Playwright selector
-      console.log("Step 3: Clicking Full System...");
-      await page.locator('span').filter({ hasText: /^Full System$/ }).getByRole('link').click();
-      await page.waitForTimeout(3000);
-
-      // Step 4: Fill Start Date - Using exact ID from codegen
-      console.log("Step 4: Setting start date...");
-      const startDate = this.calculateStartDate();
-      console.log(`Calculated start date: ${startDate}`);
-      
-      const startDateField = page.locator('#TRG_98');
-      await startDateField.click();
-      await startDateField.press('ControlOrMeta+a'); // Select all
-      await startDateField.fill(startDate); // Use dynamic date
-      await startDateField.press('Tab');
+      // Fill Document Type
+      console.log(`Setting document type to: ${documentType}`);
+      const docTypeField = page.getByRole('textbox', { name: 'Document Type *' });
+      await docTypeField.click();
+      await docTypeField.press('Control+a');
+      await docTypeField.fill(documentType);
       await page.waitForTimeout(1000);
 
-      // Step 5: Skip End Date (Tab through it as in codegen)
-      await page.locator('#TRG_99').press('Tab');
-      await page.waitForTimeout(500);
+      // Fill Begin Date (same as End Date for single day)
+      console.log(`Setting date to: ${date}`);
+      await this.fillDateField(page, 'Begin Date', date);
+      
+      // Fill End Date (same as Begin Date for single day)
+      await this.fillDateField(page, 'End Date', date);
 
-      // Step 6: Fill Instrument Type - Using exact ID from codegen
-      console.log(`Step 6: Setting record type to ${this.config.recordType}...`);
-      const instrTypeField = page.locator('#TRG_95');
-      await instrTypeField.click();
-      await instrTypeField.fill(this.config.recordType); // Use dynamic record type
-      await page.waitForTimeout(1500);
+      // Click Submit
+      console.log("Submitting search...");
+      await page.getByRole('link', { name: ' Submit' }).click();
+      
+      // Wait for results to load
+      await page.waitForTimeout(5000);
 
-      // Step 7: Click Search - Using Playwright selector
-      console.log("Step 7: Initiating search...");
-      await page.getByText('Search', { exact: true }).click();
-      
-      console.log("Waiting for search results to load...");
-      await page.waitForTimeout(15000);
-
-      // Step 8: Select all records - Using exact ID from codegen
-      console.log("Step 8: Selecting all records...");
-      await page.locator('#TRG_171').getByRole('cell').click();
-      
-      console.log("Waiting for all records to be selected...");
-      await page.waitForTimeout(20000);
-
-      // Step 9: Click Print Checked and handle popup
-      console.log("Step 9: Clicking Print Checked and handling popup...");
-      
-      // Set up promise to catch the popup BEFORE clicking
-      const popupPromise = page.waitForEvent('popup');
-      
-      // Click Print Checked
-      await page.getByText('Print Checked', { exact: true }).click();
-      
-      // Wait for the popup to appear
-      const printPage = await popupPromise as Page;
-      console.log("Print preview popup opened");
-      await printPage.waitForLoadState('networkidle');
-
-      // Step 10: Download from the popup
-      console.log("Step 10: Attempting to download document...");
-      
-      // Set up download handling on the popup page
-      const downloadPromise = printPage.waitForEvent('download', { timeout: 60000 });
-      
-      // Try to trigger download on the popup
-      try {
-        // Try clicking print/download button if visible
-        const downloadButton = printPage.locator('button:has-text("Download")') ||
-                              printPage.locator('button:has-text("Save")') ||
-                              printPage.locator('button:has-text("Print")');
-        
-        if (await downloadButton.isVisible({ timeout: 5000 })) {
-          await downloadButton.click();
-        } else {
-          // Fallback to keyboard shortcut
-          await printPage.keyboard.press('Control+s');
-        }
-      } catch (error) {
-        console.log("Using keyboard shortcut for download...");
-        await printPage.keyboard.press('Control+s');
+      // Check if there are results
+      const noResultsText = await page.locator('text=/no records found/i').isVisible({ timeout: 3000 }).catch(() => false);
+      if (noResultsText) {
+        console.log(`No records found for ${documentType} on ${date}`);
+        return { success: true, s3Path: "no-records" };
       }
+
+      // Click Export
+      console.log("Clicking Export...");
+      const exportButton = page.getByRole('link', { name: ' Export' });
+      if (!await exportButton.isVisible({ timeout: 5000 })) {
+        console.log("No export button found - likely no results");
+        return { success: true, s3Path: "no-records" };
+      }
+      await exportButton.click();
+      await page.waitForTimeout(2000);
+
+      // Set up download handling
+      const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
       
-      // Wait for download to complete
+      // Click the modal export button
+      console.log("Clicking export modal button...");
+      await page.locator('#exportResultsModalButton').click();
+      
+      // Wait for download
       const download = await downloadPromise;
-      const fileName = download.suggestedFilename() || `landmark-${Date.now()}.pdf`;
+      const fileName = `${this.config.county}-${documentType.replace(/\s+/g, '-')}-${date.replace(/\//g, '-')}.csv`;
       console.log(`Download started: ${fileName}`);
       
-      // Convert download stream to buffer for S3
+      // Convert download to buffer
       const stream = await download.createReadStream();
       const chunks: Buffer[] = [];
       const buffer = await new Promise<Buffer>((resolve, reject) => {
@@ -173,21 +159,90 @@ export class LandmarkScraper {
 
       console.log(`Download completed: ${buffer.length} bytes`);
 
-      // Step 11: Upload to S3
-      console.log("Step 11: Uploading to S3...");
+      // Upload to S3
       const s3Path = await this.s3Uploader.uploadFile(buffer, fileName);
-      console.log(`File uploaded successfully to: ${s3Path}`);
+      console.log(`Uploaded to S3: ${s3Path}`);
+
+      // Go back to search page for next iteration
+      await page.goBack();
+      await page.waitForTimeout(2000);
+
+      return { success: true, s3Path };
+
+    } catch (error) {
+      console.error(`Error scraping ${documentType} for ${date}:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async execute(): Promise<{ 
+    success: boolean; 
+    results: Array<{ date: string; documentType: string; s3Path?: string; error?: string }>;
+    summary: { total: number; successful: number; failed: number };
+  }> {
+    const results: Array<{ date: string; documentType: string; s3Path?: string; error?: string }> = [];
+    
+    try {
+      // Initialize Stagehand session
+      this.sessionInfo = await this.stagehand.init();
+      console.log(`Session started: ${this.sessionInfo.sessionId}`);
+      console.log(`Debug URL: ${this.sessionInfo.debugUrl}`);
+      
+      const page = this.stagehand.page;
+
+      // Navigate to King County website
+      console.log("Navigating to King County Landmark...");
+      await page.goto("https://recordsearch.kingcounty.gov/LandmarkWeb", {
+        waitUntil: "networkidle",
+        timeout: 60000,
+      });
+      await page.waitForTimeout(3000);
+
+      // Generate date range
+      const dates = this.generateDateRange(this.config.startDate, this.config.endDate);
+      console.log(`Processing ${dates.length} days with ${this.config.documentTypes.length} document types`);
+      console.log(`Total operations: ${dates.length * this.config.documentTypes.length}`);
+
+      // Process each day
+      for (const date of dates) {
+        // Process each document type for this day
+        for (const documentType of this.config.documentTypes) {
+          const result = await this.scrapeSingleDay(page, date, documentType);
+          
+          results.push({
+            date,
+            documentType,
+            s3Path: result.s3Path,
+            error: result.error
+          });
+
+          // Small delay between requests to avoid overwhelming the server
+          await page.waitForTimeout(2000);
+        }
+      }
+
+      // Calculate summary
+      const successful = results.filter(r => r.s3Path && !r.error).length;
+      const failed = results.filter(r => r.error).length;
 
       // Clean up
       await this.stagehand.close();
       
       return {
         success: true,
-        s3Path: s3Path,
+        results,
+        summary: {
+          total: results.length,
+          successful,
+          failed
+        }
       };
 
     } catch (error) {
-      console.error("Scraping failed:", error);
+      console.error("Scraping session failed:", error);
       
       // Try to close stagehand on error
       try {
@@ -198,7 +253,12 @@ export class LandmarkScraper {
       
       return {
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        results,
+        summary: {
+          total: results.length,
+          successful: results.filter(r => r.s3Path && !r.error).length,
+          failed: results.filter(r => r.error).length + 1
+        }
       };
     }
   }
