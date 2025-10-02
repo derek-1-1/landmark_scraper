@@ -1,8 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { ChathamRODScraper, ScrapeConfig } from "../lib/stagehand-automation.js";  // ADD .js HERE
+import { LandmarkScraper, ScrapeConfig } from "../lib/stagehand-automation.js";
 import { z } from "zod";
-
-// REST OF YOUR CODE STAYS EXACTLY THE SAME - NO OTHER CHANGES
 
 // Request validation schema
 const RequestSchema = z.object({
@@ -27,7 +25,7 @@ export default async function handler(
     console.log(`Starting scrape with config:`, config);
 
     // Create and run scraper
-    const scraper = new ChathamRODScraper(config as ScrapeConfig);
+    const scraper = new LandmarkScraper(config as ScrapeConfig);
     const result = await scraper.execute();
 
     if (result.success) {
