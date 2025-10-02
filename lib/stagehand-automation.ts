@@ -6,7 +6,7 @@ export interface ScrapeConfig {
   recordType: string;
 }
 
-export class ChathamRODScraper {
+export class LandmarkScraper {
   private stagehand: Stagehand;
   private s3Uploader: S3Uploader;
   private config: ScrapeConfig;
@@ -67,8 +67,8 @@ export class ChathamRODScraper {
       const page = this.stagehand.page;
 
       // Step 1: Navigate to website
-      console.log("Step 1: Navigating to Chatham County ROD...");
-      await page.goto("https://www.chathamncrod.org/", {
+      console.log("Step 1: Navigating to King County Landmark...");
+      await page.goto("https://recordsearch.kingcounty.gov/LandmarkWeb", {
         waitUntil: "networkidle",
         timeout: 60000,
       });
@@ -161,7 +161,7 @@ export class ChathamRODScraper {
       
       // Wait for download to complete
       const download = await downloadPromise;
-      const fileName = download.suggestedFilename() || `chatham-rod-${Date.now()}.pdf`;
+      const fileName = download.suggestedFilename() || `landmark-${Date.now()}.pdf`;
       console.log(`Download started: ${fileName}`);
       
       // Convert download stream to buffer for S3
