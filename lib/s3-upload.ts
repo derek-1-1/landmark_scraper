@@ -18,7 +18,7 @@ export class S3Uploader {
   async uploadFile(fileBuffer: Buffer, fileName: string): Promise<string> {
     const dateFolder = new Date().toISOString().split("T")[0];
     const timestamp = Date.now();
-    const key = `chatham-rod/${dateFolder}/${timestamp}-${fileName}`;
+    const key = `landmark-scraper/${dateFolder}/${timestamp}-${fileName}`;
     
     console.log(`Uploading to S3: ${key}`);
     
@@ -28,7 +28,7 @@ export class S3Uploader {
       Body: fileBuffer,
       ContentType: "application/pdf",
       Metadata: {
-        source: "chatham-county-rod",
+        source: "king-county-landmark",
         timestamp: new Date().toISOString(),
       }
     });
