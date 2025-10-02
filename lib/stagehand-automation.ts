@@ -26,7 +26,6 @@ export class LandmarkScraper {
       modelClientOptions: {
         apiKey: process.env.DEEPSEEK_API_KEY!,
         baseURL: "https://api.deepseek.com/v1",
-        temperature: 0.1,
       },
       browserbaseSessionCreateParams: {
         projectId: process.env.BROWSERBASE_PROJECT_ID!,
