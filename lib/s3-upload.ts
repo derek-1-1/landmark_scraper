@@ -49,3 +49,4 @@ export class S3Uploader {
     throw new Error(`Failed to upload to S3: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+}
