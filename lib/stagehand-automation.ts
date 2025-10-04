@@ -27,17 +27,19 @@ export class LandmarkScraper {
         apiKey: process.env.DEEPSEEK_API_KEY!,
         baseURL: "https://api.deepseek.com/v1",
       },
-      browserbaseSessionCreateParams: {
-        projectId: process.env.BROWSERBASE_PROJECT_ID!,
-        region: "us-west-2",
-        browserSettings: {
-          viewport: { width: 1920, height: 1080 },
-          blockAds: true,
-        },
-        timeout: 300,
-      },
-      verbose: 2,
-      domSettleTimeoutMs: 45000,
+     browserbaseSessionCreateParams: {
+  projectId: process.env.BROWSERBASE_PROJECT_ID!,
+  proxies: true,  // ✅ ADD THIS LINE
+  region: "us-west-2",
+  browserSettings: {
+    viewport: { width: 1920, height: 1080 },
+    blockAds: true,
+    solveCaptchas: true,  // ✅ ADD THIS LINE
+  },
+  timeout: 300,
+},
+verbose: 2,
+domSettleTimeoutMs: 45000,
     });
 
     this.s3Uploader = new S3Uploader();
